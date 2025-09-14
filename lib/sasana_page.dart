@@ -3,10 +3,12 @@ import 'dart:typed_data';
 import 'dart:async';
 import 'package:eltekers/presensi_manual.dart';
 import 'package:eltekers/scan_presensi.dart';
+import 'package:eltekers/tabel_kehadiran.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:eltekers/login_page.dart';
 
 class SasanaPage extends StatefulWidget {
   const SasanaPage({super.key});
@@ -19,6 +21,8 @@ class SasanaPageState extends State<SasanaPage> {
   Map<String, dynamic>? userData;
   Uint8List? qrBytes;
   List presensiList = [];
+  List<String> jadwalLatihan = [];
+  List<Map<String, String>> jadwalLatihanDetail = [];
   bool _loading = true;
   String? _error;
   final apiUrl = dotenv.env['API_URL'];
@@ -29,6 +33,48 @@ class SasanaPageState extends State<SasanaPage> {
     super.initState();
     _fetchUser();
     _fetchPresensi();
+    _fetchJadwalLatihan();
+  }
+
+  Future<void> _fetchJadwalLatihan() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('token');
+
+      final response = await http.get(
+        Uri.parse("$apiUrl/api/jadwal-latihan/"),
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer $token",
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+
+        debugPrint("Jadwal latihan: $data");
+
+        final List jadwal = data['jadwal_latihan'] ?? [];
+
+        setState(() {
+          // Simpan detail hari + jam
+          jadwalLatihanDetail = jadwal.map<Map<String, String>>((e) {
+            return {
+              "hari": e['hari'].toString(),
+              "jam": e['jam_latihan'].toString(),
+            };
+          }).toList();
+
+          // Kalau tetap perlu list hari saja
+          jadwalLatihan =
+              jadwalLatihanDetail.map((e) => e['hari'] ?? "").toList();
+        });
+      } else {
+        debugPrint("Gagal load jadwal: ${response.statusCode}");
+      }
+    } catch (e) {
+      debugPrint("Error fetchJadwal: $e");
+    }
   }
 
   Future<void> _fetchUser() async {
@@ -121,8 +167,55 @@ class SasanaPageState extends State<SasanaPage> {
       );
     }
 
+    final List<String> hariList = [
+      "Minggu",
+      "Senin",
+      "Selasa",
+      "Rabu",
+      "Kamis",
+      "Jumat",
+      "Sabtu",
+    ];
+
+    final now = DateTime.now();
+    final todayName = hariList[now.weekday % 7]; // weekday 1=Senin...7=Minggu
+
+    if (_loading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final todayJadwal = jadwalLatihanDetail.firstWhere(
+      (j) => j['hari'] == todayName,
+      orElse: () => {"hari": "", "jam": ""},
+    );
+
+    final jadwalHariIni = todayJadwal['hari']!.isNotEmpty
+        ? "Jadwal Latihan: ${todayJadwal['hari']} (${todayJadwal['jam']})"
+        : "Jadwal Latihan: Tidak ada jadwal hari ini";
+
     return Scaffold(
-      appBar: AppBar(title: const Text("Sasana Page")),
+      appBar: AppBar(
+        automaticallyImplyLeading: false, // Hilangkan tombol back
+        title: const Text("Home Page"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.clear(); // hapus semua data di shared preferences
+
+              if (!mounted) return;
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (context) => const LoginPage()),
+                (route) => false,
+              );
+            },
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: userData == null
@@ -150,13 +243,42 @@ class SasanaPageState extends State<SasanaPage> {
                   Text("Nama Sasana: ${userData!['nama_sasana']}"),
                   Text("Sejak: ${userData!['sejak']}"),
                   Text("Alamat: ${userData!['alamat_sasana']}"),
-                  Text("Jumlah Instruktur: ${userData!['jumlah_instruktur']}"),
-                  Text("Jumlah Peserta: ${userData!['jumlah_peserta']}"),
-                  Text("Jumlah Peserta Aktif: ${userData!['peserta_aktif']}"),
                   Text(
-                      "Jumlah Latihan Per Minggu: ${userData!['jumlah_latihan_per_minggu']}"),
+                    jadwalHariIni,
+                    // style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: hariList.map((hari) {
+                      bool isInJadwal = jadwalLatihan.contains(hari);
+                      bool isToday = hari == todayName;
 
+                      Color bgColor = Colors.grey.shade300;
+                      if (isToday && isInJadwal) {
+                        bgColor = Colors.green;
+                      } else if (isToday) {
+                        bgColor = Colors.blue;
+                      } else if (isInJadwal) {
+                        bgColor = Colors.grey;
+                      }
+
+                      return Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: bgColor,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          hari.substring(0, 3),
+                          style: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+
+                  const SizedBox(height: 16),
                   Row(
                     children: [
                       Expanded(
@@ -235,15 +357,51 @@ class SasanaPageState extends State<SasanaPage> {
                 ],
               ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          _fetchUser();
-          _fetchPresensi();
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Halaman berhasil dimuat ulang")),
-          );
-        },
-        child: const Icon(Icons.refresh),
+      floatingActionButton: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          const SizedBox(width: 12),
+          Expanded(
+            // biar full width
+            child: Padding(
+              padding: const EdgeInsets.only(left: 16),
+              child: FloatingActionButton.extended(
+                heroTag: "btnLihatKehadiran",
+                backgroundColor: Colors.blue,
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const TabelKehadiranPage(),
+                    ),
+                  );
+                },
+                label: const Text(
+                  'Tabel Kehadiran Peserta',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                icon: const Icon(Icons.table_chart, color: Colors.white),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          FloatingActionButton(
+            heroTag: "btnRefresh",
+            backgroundColor: Colors.blue,
+            onPressed: () {
+              _fetchUser();
+              _fetchPresensi();
+              _fetchJadwalLatihan();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Halaman berhasil dimuat ulang")),
+              );
+            },
+            child: const Icon(Icons.refresh, color: Colors.white),
+          ),
+        ],
       ),
     );
   }

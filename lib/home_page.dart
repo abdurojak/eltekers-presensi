@@ -1,9 +1,13 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:async';
+import 'package:eltekers/login_page.dart';
+import 'package:eltekers/riwayat_presensi.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class HomePage extends StatefulWidget {
@@ -25,6 +29,20 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _fetchUser();
+  }
+
+  Future<bool> _requestStoragePermission() async {
+    // Android 13+ pakai READ_MEDIA_IMAGES (Permission.photos)
+    if (await Permission.photos.request().isGranted) {
+      return true;
+    }
+
+    // Android 12 kebawah pakai storage
+    if (await Permission.storage.request().isGranted) {
+      return true;
+    }
+
+    return false;
   }
 
   Future<void> _fetchUser() async {
@@ -77,6 +95,40 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _saveQrToGallery() async {
+    if (qrBytes == null) return;
+
+    final granted = await _requestStoragePermission();
+
+    if (!granted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Izin penyimpanan ditolak")),
+      );
+      return;
+    }
+
+    try {
+      final result = await ImageGallerySaverPlus.saveImage(
+        Uint8List.fromList(qrBytes!),
+        quality: 100,
+        name: "qrcode_${userData!['detail']['nama_peserta']}",
+      );
+
+      debugPrint("Save result: $result");
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("QR Code berhasil disimpan ke galeri")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Gagal menyimpan gambar: $e")),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -87,13 +139,32 @@ class _HomePageState extends State<HomePage> {
 
     if (_error != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text("Home Page")),
+        appBar: AppBar(title: const Text("Beranda")),
         body: Center(child: Text(_error!)),
       );
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Home Page")),
+      appBar: AppBar(
+        automaticallyImplyLeading: false, // Hilangkan tombol back
+        title: const Text("Home Page"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.clear(); // hapus semua data di shared preferences
+
+              if (!mounted) return;
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (context) => const LoginPage()),
+                (route) => false,
+              );
+            },
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: userData == null
@@ -101,8 +172,10 @@ class _HomePageState extends State<HomePage> {
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text("Detail Peserta:",
-                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Text(
+                    "Detail Peserta:",
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   Text("Nama: ${userData!['detail']['nama_peserta']}"),
                   Text(
                       "Tanggal Lahir: ${userData!['detail']['tanggal_lahir_peserta']}"),
@@ -120,6 +193,34 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ),
                   ],
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.download),
+                          label: const Text("Download QR"),
+                          onPressed: _saveQrToGallery,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.history),
+                          label: const Text("Riwayat Presensi"),
+                          onPressed: () {
+                            // TODO: arahkan ke halaman riwayat presensi
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const RiwayatPresensiPage(),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
       ),
